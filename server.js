@@ -19,6 +19,7 @@ var adapter = require('socket.io-redis');
 var app = express();
 var http = require('http').Server(app);
 var io = require('socket.io')(http);
+var p2p = require('socket.io-p2p-server').Server;
 var secure = false;
 /** Boundary limit for fetching tiles */
 var tileRadius = 300;
@@ -29,6 +30,7 @@ var host = 'localhost';
 var tileRedis = redis.createClient(redisPort, host, {return_buffers: true});
 
 io.adapter(adapter(redis.createClient({host: host, port: redisPort})));
+io.use(p2p);
 
 /**!! Big TODO Ditch express.js for rest Http api. Considering Go or nhhttp2 w/asio lib */
 
@@ -164,7 +166,7 @@ io.on('connection', function (socket) {
     tileRedis.incr("currentconnections");
     tileRedis.hset("user:" + ip, "lastconnect", Date.now() / 1000 | 0);
     tileRedis.hincrby("user:" + ip, "connectcount", 1);
-
+    
     socket.emit('states', clientStates);
 
     socket.on('disconnect', function () {

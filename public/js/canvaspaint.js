@@ -22,7 +22,44 @@ $(document).ready(function () {
     var ctx = canvas.getContext('2d');
     /** Screen ratio is 2 for hdpi/retina displays */
     var ratio = 1;
-    var socket = io();
+    var signalControlSocket = io();
+    //WebRTC!
+
+    function guid() {
+        function s4() {
+            return Math.floor((1 + Math.random()) * 0x10000)
+                    .toString(16)
+                    .substring(1);
+        }
+        return s4() + s4() + '-' + s4() + '-' + s4() + '-' +
+                s4() + '-' + s4() + s4() + s4();
+    }
+    var opts = {peerOpts: {trickle: false}, autoUpgrade: false};
+    var socket = new P2P(signalControlSocket, opts, function () {
+        console.log("p2p init");
+        socket.usePeerConnection = true;
+        socket.emit('peer-obj', {peerId: guid()});
+        $('.status-info').css({color: '#0f0'});
+    });
+    
+    socket.on('peer-error', function (data) {
+        console.log("peer-error");
+        console.log(data);
+        $('.status-info').css({color: '#f00'});
+    });
+
+    socket.on('ready', function () {
+        console.log('p2p ready called');
+    });
+
+    // this event will be triggered over the socket transport 
+    // until `usePeerConnection` is set to `true`
+    socket.on('peer-obj', function (data) {
+        console.log('got messsage from peer');
+        console.log(data);
+    });
+    //
+
     /**
      * Store states of other connected clients
      * @type type
@@ -989,7 +1026,7 @@ $(document).ready(function () {
             updatePixelColor(x, y);
         } else {
             //just a regular mouse move? this needs refactoring
-            if ($.now() - lastEmit > 60) {
+            if ($.now() - lastEmit > 30) {
                 moveMessage = {
                     x: evt.offsetX + client.offsetX,
                     y: evt.offsetY + client.offsetY,
