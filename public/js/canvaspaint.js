@@ -13,7 +13,7 @@ $(document).ready(function () {
     'use strict';
     var tileSize = 256;
     /** shows tile boundaries and extra console output */
-    var debug = false;
+    var debug = true;
     var lastPing = $.now();
     var canvas = document.getElementById("paper");
     canvas.width = window.innerWidth + tileSize * 2;
@@ -467,26 +467,44 @@ $(document).ready(function () {
         oReq.send(JSON.stringify({creds: window.credsyo}));
     };
 
-    var updateDirtyTiles = _.throttle(function () {
+    var updateDirtyTiles = _.throttle(function () { //mabe no longer throttle this
         Object.keys(tileCollection).forEach(function (tileKey) {
             if (tileCollection[tileKey].dirty) {
                 var tile = tileCollection[tileKey];
-                //find it onscreen
+                //tile top-left origin onscreen
                 var posx = tile.x * tileSize - client.offsetX;
                 var posy = tile.y * tileSize - client.offsetY;
-                var ofc = document.createElement("canvas");
-                ofc.width = tileSize;
-                ofc.height = tileSize;
-                var oCtx = ofc.getContext('2d');
-                oCtx.drawImage(canvas, posx, posy, tileSize, tileSize, 0, 0, tileSize, tileSize);
-                //swap
-                tileCollection[tileKey].canvas = ofc;
-                tileCollection[tileKey].dirty = false;
+                //get the cached inmemory tile's context
+                var mCtx = tile.canvas.getContext('2d');
+                //draw the updated region off screen
+                mCtx.drawImage(canvas, //main screen
+                        posx + tile.dirtyConstraints.xMin, //sx
+                        posy + tile.dirtyConstraints.yMin, //sy
+                        tile.dirtyConstraints.xMax, //swidth
+                        tile.dirtyConstraints.yMax, //sheight
+                        tile.dirtyConstraints.xMin, //dx
+                        tile.dirtyConstraints.yMin, //dy
+                        tile.dirtyConstraints.xMax, //dwidth
+                        tile.dirtyConstraints.yMax); //dheight
+                //unset flag and region.
+                tile.dirty = false;
+                delete tile.dirtyConstraints;
+
+                /*
+                 var ofc = document.createElement("canvas");
+                 ofc.width = tileSize;
+                 ofc.height = tileSize;
+                 var oCtx = ofc.getContext('2d');
+                 oCtx.drawImage(canvas, posx, posy, tileSize, tileSize, 0, 0, tileSize, tileSize);
+                 //swap
+                 tileCollection[tileKey].canvas = ofc;
+                 tileCollection[tileKey].dirty = false;
+                 */
                 //post tile to persistance layer
-                if (tile.filthy) {
-                    saveTileAt(tile.x, tile.y, ofc);
-                    tile.filthy = false;
-                }
+//                if (tile.filthy) {
+//                    saveTileAt(tile.x, tile.y, ofc);
+//                    tile.filthy = false;
+//                }
             }
         });
     }, 400);
@@ -953,6 +971,7 @@ $(document).ready(function () {
     /**
      * When the mouse moves process draw actions or movement.
      * This could do with a re-write, cyclic complexity < 15
+     * https://www.youtube.com/watch?v=fa6Kv1fOStM
      * @param {jQuery} evt Incoming event
      */
     $(canvas).on('mousemove touchmove', function (evt) {
@@ -974,14 +993,54 @@ $(document).ready(function () {
                 shadow = client.state.size * 0.8;
             }
             // we need to factor in the size of the brush which might overlap more than one tile
-            var i, tileX, tileY, key;
-            for (i = -(client.state.size / 2) - shadow; i < (client.state.size / 2) + shadow; i += 1) {
+            var i, tileX, tileY, key, localX, localY;
+            for (i = -(client.state.size / 1.8) - shadow; i < (client.state.size / 1.8) + shadow; i += 1) {
                 //set the 'tile' to be recached
                 tileX = Math.floor((x + client.offsetX + i) / tileSize);
                 tileY = Math.floor((y + client.offsetY + i) / tileSize);
+                //local x,y relative to the tile
+                //TODO: Learn math properly ¯\_(ツ)_/¯
+                if (tileX > 0) {
+                    localX = Math.floor(Math.abs(x + client.offsetX + i) % tileSize);
+                } else {
+                    localX = tileSize - Math.floor(Math.abs(x + client.offsetX + i) % tileSize);
+                }
+                if (tileY > 0) {
+                    localY = Math.floor(Math.abs(y + client.offsetY + i) % tileSize);
+                } else {
+                    localY = tileSize - Math.floor(Math.abs(y + client.offsetY + i) % tileSize);
+                }
                 key = tileX + '/' + tileY;
                 tileCollection[key].dirty = true; //indicate an ofscreen tile needs to be re-fetched from the master canvas
                 tileCollection[key].filthy = true; //indicate that this tile needs saving
+
+                //console.log('local area: ' + localX + ", " + localY);
+                //update dirty region constraints
+                if (tileCollection[key].hasOwnProperty("dirtyConstraints")) {
+                    //run checks on local tile coordinate and update max/min constrains for dirty region
+                    if (localX < tileCollection[key].dirtyConstraints.xMin) {
+                        tileCollection[key].dirtyConstraints.xMin = localX;
+                    }
+                    if (localX > tileCollection[key].dirtyConstraints.xMax) {
+                        tileCollection[key].dirtyConstraints.xMax = localX;
+                    }
+                    if (localY < tileCollection[key].dirtyConstraints.yMin) {
+                        tileCollection[key].dirtyConstraints.yMin = localY;
+                    }
+                    if (localY > tileCollection[key].dirtyConstraints.yMax) {
+                        tileCollection[key].dirtyConstraints.yMax = localY;
+                    }
+                    console.log(tileCollection[key].dirtyConstraints);
+                } else {
+                    //set initial state of where the mouse is relative to the tile
+                    tileCollection[key].dirtyConstraints = {
+                        xMin: localX,
+                        yMin: localY,
+                        xMax: localX,
+                        yMax: localY
+                    };
+                }
+                //
             }
             //update 'last' position values for next draw call
             client.x = x;

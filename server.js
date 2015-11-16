@@ -19,7 +19,7 @@ var adapter = require('socket.io-redis');
 var app = express();
 var http = require('http').Server(app);
 var io = require('socket.io')(http);
-var secure = false;
+var Canvas = require('canvas'), Image = Canvas.Image;
 /** Boundary limit for fetching tiles */
 var tileRadius = 300;
 var patchPass = 'meh patch pass yo';
@@ -137,7 +137,87 @@ app.get('/canvases/:name/:zoom/:x/:y', function (req, res) {
     });
 });
 
-app.patch('/canvases/:name/:zoom/:x/:y', function (req, res) {
+/**
+ * As the cool name suggests, this 'PATCHes' a tile patch onto a tile.
+ * If the tile does not exist yet it should be created as a transparent
+ * 256x256 image and then the patch applied and saved.
+ * 
+ * @param {Request} req incoming request with PNG body
+ * @param {Response} res response sent back is 201 on success
+ * 
+ * Rest parms:
+ * ox - local offset in the tile to be patched 
+ * oy - local y offset in the tile to be patched
+ */
+app.patch('/canvases/:name/:zoom/:x/:y/:ox:oy', function (req, res) {
+    //request range checking
+    var p = req.params;
+    if (p.name !== "main") {
+        return res.sendStatus(404);
+    } else if (Number(p.zoom) !== 1) {
+        return res.sendStatus(404);
+    } else if (Number(p.x) < -(tileRadius / 2) ||
+            Number(p.x) > tileRadius / 2 ||
+            Number(p.y) < -(tileRadius / 2) ||
+            Number(p.y) > tileRadius / 2) {
+        return res.sendStatus(416); //requested outside range
+    } else if (Number(p.ox) < 0 ||
+            Number(p.ox) > 256 ||
+            Number(p.oy) < 0 ||
+            Number(p.oy) > 256) {
+        return res.sendStatus(416); //patch offset is out of acceptable range
+    }
+
+    var key = req.params.name + ':' + req.params.zoom + ':' + req.params.x + ':' + req.params.y;
+
+    tileRedis.hget("tile:" + key, "data", function (err, reply) {
+        var buffer;
+        if (err !== null) {
+            console.log(err);
+            res.sendStatus(500);
+            return;
+        } else if (reply === null) {
+            //no tile here yet create transparent blank one
+            var canvas = new Canvas(256, 256);
+            var ctx = canvas.getContext('2d');
+            //load patch image
+            var sourceImage = new Image;
+            sourceImage.src = req.body;
+            //draw new changes atop
+            ctx.drawImage(sourceImage, Number(p.ox), Number(p.oy));
+            console.log("got size drawing into fresh: " + sourceImage.width + " x " + sourceImage.height);
+            buffer = canvas.toBuffer();
+        } else {
+            //apply image patch on top of existing one
+            console.log('applying patch on top of existing image');
+            var canvas = new Canvas(256, 256);
+            var destinationImage = new Image;
+            var ctx = canvas.getContext('2d');
+            destinationImage.src = reply; // loads buffer from redis
+            ctx.drawImage(destinationImage, 0, 0);
+
+            //load patch image
+            var sourceImage = new Image;
+            sourceImage.src = req.body;
+            //draw new changes atop
+            ctx.drawImage(sourceImage, Number(p.ox), Number(p.oy));
+            console.log("got size: " + sourceImage.width + " x " + sourceImage.height);
+            //save to redis
+            buffer = canvas.toBuffer();
+        }
+        tileRedis.hset(key, "data", buffer);
+        tileRedis.hset(key, "lastuser", req.ip);
+        tileRedis.hset(key, "lastupdate", Date.now() / 1000);
+        tileRedis.hset(key, "protection", 0);
+
+        res.sendStatus(201);
+        tileRedis.incr('patchcount');
+        tileRedis.hincrby("user:" + req.ip, "patchcount", 1);
+    });
+});
+
+//not used
+app.patch('/canvases/:name/:zoom/:x/:y/meta', function (req, res) {
     if (('creds' in req.body) && req.body.creds === patchPass) {
         var key = "tile:" + req.params.name + ':' + req.params.zoom + ':' + req.params.x + ':' + req.params.y;
         tileRedis.hset(key, "protection", 1, function (err) {
